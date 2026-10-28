@@ -1,107 +1,100 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { loadConfig } from "../src/config.js";
-import { openTerminal } from "../src/terminal.js";
-import { createWorktree, listWorktrees, removeWorktree, repository } from "../src/worktree.js";
+import {
+  createWorktree,
+  inspectHooks,
+  listWorktrees,
+  removeWorktree,
+  repository,
+  resolveWorktree,
+} from "../src/worktree.js";
 
-let json = process.argv.includes("--json");
-let porcelain = process.argv.includes("--porcelain");
-
-function output(value) {
-  if (json) process.stdout.write(`${JSON.stringify({ ok: true, ...value })}\n`);
-  else if (porcelain) {
-    for (const [key, item] of Object.entries({ ok: true, ...value })) {
-      process.stdout.write(`${key}=${typeof item === "object" ? JSON.stringify(item) : item}\n`);
-    }
-  } else process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
-}
+const machine = process.argv.includes("--json") || process.argv.includes("--porcelain");
 
 async function main() {
-  const { values, positionals } = parseArgs({
+  const {
+    values,
+    positionals: [command, target, ...extra],
+  } = parseArgs({
     allowPositionals: true,
     options: {
       json: { type: "boolean" },
       porcelain: { type: "boolean" },
       status: { type: "boolean" },
-      slug: { type: "string" },
       remote: { type: "string" },
       base: { type: "string" },
       from: { type: "string" },
       prefix: { type: "string" },
       path: { type: "string" },
       dir: { type: "string" },
-      setup: { type: "string" },
-      "lease-owner": { type: "string" },
-      "lease-reason": { type: "string" },
+      "no-hooks": { type: "boolean" },
       force: { type: "boolean" },
-      reuse: { type: "boolean" },
       "keep-branch": { type: "boolean" },
-      open: { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
   });
-  json = values.json;
-  porcelain = values.porcelain;
-  if (values.help || (!positionals.length && !values.slug)) {
+  if (!command || values.help) {
     process.stdout.write(
-      "git-wt <описание> [--slug <ветка>] [--base <ветка> | --from <ref>] [--dir <каталог> | --path <путь>] [--json | --porcelain]\ngit-wt list [--status] [--json]\ngit-wt config\ngit-wt remove <ветка> [--lease-owner <владелец>] [--force] [--keep-branch]\n",
+      "git-wt add <ветка> [--base <remote-ветка> | --from <ref>] [--path <путь> | --dir <каталог>] [--no-hooks] [--json]\ngit-wt list [--status] [--json | --porcelain]\ngit-wt cd <ветка|путь>\ngit-wt hooks <ветка|путь>\ngit-wt remove <ветка|путь> [--force] [--keep-branch]\ngit-wt config\n",
     );
     return;
   }
+  if (extra.length || (!["add", "cd", "remove", "hooks"].includes(command) && target))
+    throw new Error("Лишние позиционные аргументы");
+  if (values["no-hooks"] && command !== "add")
+    throw new Error("--no-hooks допустим только при создании worktree");
   const cwd = process.cwd();
   const config = {
     remote: values.remote,
     base: values.base,
     prefix: values.prefix,
     worktreeDir: values.dir,
-    setup: values.setup,
   };
-  if (positionals[0] === "list")
-    return output({ worktrees: await listWorktrees(cwd, { status: values.status }) });
-  if (positionals[0] === "config") {
-    const repo = await repository(cwd);
-    return output({ config: await loadConfig(repo.root, config) });
-  }
-  if (positionals[0] === "remove") {
-    return output(
-      await removeWorktree(cwd, positionals[1], {
+  let result;
+  switch (command) {
+    case "add":
+      result = await createWorktree(cwd, {
+        branch: target,
+        path: values.path,
+        from: values.from,
+        noHooks: values["no-hooks"],
         config,
-        owner: values["lease-owner"],
+      });
+      break;
+    case "list":
+      result = await listWorktrees(cwd, { status: values.status });
+      break;
+    case "cd":
+      result = await resolveWorktree(cwd, target);
+      break;
+    case "hooks":
+      result = await inspectHooks(cwd, target);
+      break;
+    case "remove":
+      result = await removeWorktree(cwd, target, {
         force: values.force,
         deleteBranch: !values["keep-branch"],
-      }),
-    );
+      });
+      break;
+    case "config":
+      result = await loadConfig((await repository(cwd)).root, config);
+      break;
+    default:
+      throw new Error(`Неизвестная команда: ${command}`);
   }
-  const result = await createWorktree(cwd, {
-    config,
-    branch: values.slug,
-    description: positionals.join(" "),
-    path: values.path,
-    from: values.from,
-    owner: values["lease-owner"],
-    reason: values["lease-reason"],
-    reuse: values.reuse,
-  });
-  const { config: resolved, ...record } = result;
-  if (values.open)
-    record.terminal = await openTerminal({
-      cwd: record.worktreePath,
-      branch: record.branch,
-      config: resolved,
-    });
-  output(record);
+  process.stdout.write(
+    command === "cd" && !machine
+      ? `${result.worktreePath}\n`
+      : `${JSON.stringify(result, null, machine ? 0 : 2)}\n`,
+  );
 }
 
 main().catch((error) => {
-  const result = {
-    ok: false,
-    code: error.code ?? "unexpected_error",
-    error: error.message,
-    ...error.details,
-  };
-  if (json) process.stderr.write(`${JSON.stringify(result)}\n`);
-  else if (porcelain)
-    process.stderr.write(`ok=false\ncode=${result.code}\nerror=${result.error}\n`);
-  else process.stderr.write(`Ошибка: ${error.message}\n`);
+  process.stderr.write(
+    machine
+      ? `${JSON.stringify({ code: error.code ?? "unexpected_error", error: error.message, ...error.details })}\n`
+      : `Ошибка: ${error.message}\n`,
+  );
   process.exitCode = 1;
 });

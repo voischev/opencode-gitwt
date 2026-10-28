@@ -7,7 +7,13 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "../src/config.js";
 import { GitwtPlugin } from "../src/index.js";
-import { createWorktree, listWorktrees, removeWorktree, updateRecord } from "../src/worktree.js";
+import {
+  createWorktree,
+  inspectHooks,
+  listWorktrees,
+  removeWorktree,
+  resolveWorktree,
+} from "../src/worktree.js";
 
 const bin = fileURLToPath(new URL("../bin/git-wt.js", import.meta.url));
 const identity = {
@@ -17,17 +23,16 @@ const identity = {
   GIT_COMMITTER_NAME: "Тест",
   GIT_COMMITTER_EMAIL: "test@example.invalid",
   GIT_CONFIG_NOSYSTEM: "1",
-  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
 };
-
-function git(args, cwd) {
-  return execFileSync("git", args, {
+const git = (args, cwd) =>
+  execFileSync("git", args, {
     cwd,
     env: identity,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
-}
+const command = (script) => [process.execPath, "-e", script];
 
 async function fixture(t) {
   const base = path.join(os.tmpdir(), "opencode");
@@ -47,385 +52,258 @@ async function fixture(t) {
   return { root, repo, home, remote };
 }
 
-test("новая ветка начинается на свежем remote main и не получает upstream", async (t) => {
-  const f = await fixture(t);
-  const head = git(["rev-parse", "HEAD"], f.repo);
-  git(["switch", "-c", "unrelated"], f.repo);
-  await writeFile(path.join(f.repo, "local.txt"), "Локальная ветка");
-  git(["add", "local.txt"], f.repo);
-  git(["commit", "-m", "Локальное изменение"], f.repo);
-  const result = await createWorktree(f.repo, { description: "Исправить вход", home: f.home });
-  assert.equal(result.branch, "ispravit-vhod");
-  assert.equal(result.head, head);
-  assert.equal(git(["branch", "--show-current"], result.worktreePath), result.branch);
-  assert.throws(() => git(["rev-parse", "--abbrev-ref", "@{upstream}"], result.worktreePath));
-  assert.equal((await listWorktrees(f.repo))[1].state.status, "ready");
-});
-
-test("fetch обновляет устаревшую remote-tracking ветку до создания worktree", async (t) => {
+test("создаёт новую ветку от свежей remote-базы, не меняя грязный исходный checkout", async (t) => {
   const f = await fixture(t);
   const other = path.join(f.root, "other");
   git(["clone", f.remote, other], f.root);
   await writeFile(path.join(other, "remote.txt"), "Свежий коммит");
-  git(["add", "remote.txt"], other);
-  git(["commit", "-m", "Обновление remote"], other);
+  git(["add", "."], other);
+  git(["commit", "-m", "Обновление"], other);
   git(["push", "origin", "main"], other);
-  const expected = git(["rev-parse", "HEAD"], other);
-  assert.notEqual(git(["rev-parse", "origin/main"], f.repo), expected);
-  const created = await createWorktree(f.repo, { branch: "fresh", home: f.home });
-  assert.equal(created.head, expected);
-  assert.equal(
-    await readFile(path.join(created.worktreePath, "remote.txt"), "utf8"),
-    "Свежий коммит",
-  );
+  git(["switch", "-c", "current-task"], f.repo);
+  await writeFile(path.join(f.repo, "unsaved.txt"), "Исходные изменения");
+  const created = await createWorktree(f.repo, { branch: "feature/Login", home: f.home });
+  assert.equal(created.head, git(["rev-parse", "HEAD"], other));
+  assert.equal(git(["branch", "--show-current"], created.worktreePath), "feature/Login");
+  assert.equal(git(["branch", "--show-current"], f.repo), "current-task");
+  assert.equal(await readFile(path.join(f.repo, "unsaved.txt"), "utf8"), "Исходные изменения");
+  assert.equal(git(["status", "--porcelain"], created.worktreePath), "");
+  assert.throws(() => git(["rev-parse", "@{upstream}"], created.worktreePath));
 });
 
-test("явный from HEAD работает без remote", async (t) => {
+test("локальная база работает без remote; существующая ветка и неверный prefix отклоняются", async (t) => {
   const f = await fixture(t);
   git(["remote", "remove", "origin"], f.repo);
-  const result = await createWorktree(f.repo, { branch: "offline", from: "HEAD", home: f.home });
-  assert.equal(result.head, git(["rev-parse", "HEAD"], f.repo));
-});
-
-test("повреждённый JSONC и неизвестные настройки не создают worktree", async (t) => {
-  const f = await fixture(t);
-  await mkdir(path.join(f.repo, ".opencode"));
-  await writeFile(path.join(f.repo, ".opencode/gitwt.jsonc"), '{"base":}');
-  await assert.rejects(createWorktree(f.repo, { branch: "bad", home: f.home }), {
-    code: "invalid_config",
-  });
-  await writeFile(path.join(f.repo, ".opencode/gitwt.jsonc"), '{"worktreeDirr":"/tmp/wrong"}');
-  await assert.rejects(createWorktree(f.repo, { branch: "bad", home: f.home }), {
-    code: "invalid_config",
-  });
-  await writeFile(path.join(f.repo, ".opencode/gitwt.jsonc"), '{"sync":false}');
-  await assert.rejects(createWorktree(f.repo, { branch: "bad", home: f.home }), {
-    code: "invalid_config",
-  });
-  assert.equal((await listWorktrees(f.repo)).length, 1);
-});
-
-test("точное имя ветки и кастомный путь с пробелами и кавычками сохраняются", async (t) => {
-  const f = await fixture(t);
-  const worktreePath = path.join(f.root, 'папка "с кавычками"');
-  const result = await createWorktree(f.repo, {
-    branch: "feature/Login",
-    path: worktreePath,
-    home: f.home,
-  });
-  assert.equal(result.branch, "feature/Login");
-  assert.equal(result.worktreePath, await realpath(worktreePath));
-  await removeWorktree(f.repo, result.branch, { home: f.home });
-});
-
-test("конфиг раскрывает ~, CLI переопределяет проектный и глобальный конфиг", async (t) => {
-  const f = await fixture(t);
-  await mkdir(path.join(f.repo, ".opencode"));
-  await writeFile(path.join(f.home, ".git-wt"), "worktree_dir: ~/global\nprefix: global/\n");
-  await writeFile(
-    path.join(f.repo, ".opencode/gitwt.jsonc"),
-    '{"prefix":"project/","worktreeDir":"~/project"}',
-  );
-  const config = await loadConfig(f.repo, { prefix: "cli/", worktreeDir: "~/cli" }, f.home);
-  assert.equal(config.prefix, "cli/");
-  assert.equal(config.worktreeDir, path.join(f.home, "cli"));
-  const created = await createWorktree(f.repo, {
-    branch: "task",
-    home: f.home,
-    config: { prefix: "cli/", worktreeDir: "~/cli" },
-  });
-  assert.ok(created.worktreePath.startsWith(path.join(f.home, "cli")));
-  assert.equal(created.branch, "cli/task");
-});
-
-test("существующую ветку можно подключить только с reuse", async (t) => {
-  const f = await fixture(t);
-  git(["branch", "feature/existing"], f.repo);
-  await assert.rejects(createWorktree(f.repo, { branch: "feature/existing", home: f.home }), {
+  const created = await createWorktree(f.repo, { branch: "local", from: "HEAD", home: f.home });
+  assert.equal(created.head, git(["rev-parse", "HEAD"], f.repo));
+  await assert.rejects(createWorktree(f.repo, { branch: "local", from: "HEAD", home: f.home }), {
     code: "branch_exists",
   });
-  const result = await createWorktree(f.repo, {
-    branch: "feature/existing",
-    reuse: true,
-    home: f.home,
-  });
-  assert.equal(result.head, git(["rev-parse", "feature/existing"], f.repo));
-});
-
-test("невалидный итоговый prefix не создаёт ветку или каталог", async (t) => {
-  const f = await fixture(t);
-  await assert.rejects(
-    createWorktree(f.repo, { branch: "task", home: f.home, config: { prefix: "../" } }),
-    { code: "invalid_name" },
-  );
-  assert.equal((await listWorktrees(f.repo)).length, 1);
-});
-
-test("lease нельзя обойти отсутствием owner или флагом force, состояние не загрязняет git", async (t) => {
-  const f = await fixture(t);
-  const result = await createWorktree(f.repo, { branch: "leased", owner: "agent-1", home: f.home });
-  assert.equal(git(["status", "--porcelain"], result.worktreePath), "");
-  await assert.rejects(removeWorktree(f.repo, result.branch, { home: f.home }), {
-    code: "lease_conflict",
-  });
-  await assert.rejects(
-    removeWorktree(f.repo, result.branch, { owner: "agent-2", force: true, home: f.home }),
-    { code: "lease_conflict" },
-  );
-  const removed = await removeWorktree(f.repo, result.branch, { owner: "agent-1", home: f.home });
-  assert.equal(removed.branchDeleted, true);
-});
-
-test("dirty worktree сохраняется без force; явный force удаляет без автокоммита", async (t) => {
-  const f = await fixture(t);
-  const result = await createWorktree(f.repo, { branch: "dirty", home: f.home });
-  await writeFile(path.join(result.worktreePath, "unsaved.txt"), "Не сохранено");
-  await assert.rejects(removeWorktree(f.repo, result.branch, { home: f.home }), {
-    code: "worktree_dirty",
-  });
-  const listed = await listWorktrees(f.repo, { status: true });
-  assert.equal(listed.find((entry) => entry.branch === "dirty").dirty, true);
-  const before = git(["rev-list", "--all", "--count"], f.repo);
-  await removeWorktree(f.repo, result.branch, { force: true, home: f.home });
-  assert.equal(git(["rev-list", "--all", "--count"], f.repo), before);
-});
-
-test("preRemove, создавший изменения, останавливает удаление", async (t) => {
-  const f = await fixture(t);
-  const created = await createWorktree(f.repo, { branch: "hook", home: f.home });
-  const config = {
-    hooks: {
-      preRemove: [[process.execPath, "-e", 'require("fs").writeFileSync("hook.txt", "Изменение")']],
-    },
-  };
-  await assert.rejects(removeWorktree(f.repo, created.branch, { home: f.home, config }), {
-    code: "worktree_dirty",
-  });
-  assert.equal(await readFile(path.join(created.worktreePath, "hook.txt"), "utf8"), "Изменение");
-});
-
-test("неслитая ветка сохраняется с предупреждением, слитая удаляется", async (t) => {
-  const f = await fixture(t);
-  const created = await createWorktree(f.repo, { branch: "unmerged", home: f.home });
-  await writeFile(path.join(created.worktreePath, "feature.txt"), "Фича");
-  git(["add", "."], created.worktreePath);
-  git(["commit", "-m", "Фича"], created.worktreePath);
-  const removed = await removeWorktree(f.repo, created.branch, { home: f.home });
-  assert.equal(removed.branchDeleted, false);
-  assert.ok(removed.warning);
-  git(["merge", "--ff-only", "unmerged"], f.repo);
-  const again = await createWorktree(f.repo, { branch: "unmerged", reuse: true, home: f.home });
-  assert.equal((await removeWorktree(f.repo, again.branch, { home: f.home })).branchDeleted, true);
-});
-
-test("ошибка setup сохраняет worktree и явное состояние ошибки", async (t) => {
-  const f = await fixture(t);
   await assert.rejects(
     createWorktree(f.repo, {
-      branch: "failed",
+      branch: "bad",
+      from: "HEAD",
       home: f.home,
-      config: { setup: [process.execPath, "-e", "process.exit(9)"] },
+      config: { prefix: "../" },
     }),
-    { code: "setup_failed" },
-  );
-  const items = await listWorktrees(f.repo);
-  assert.equal(items.find((item) => item.branch === "failed").state.status, "setup_failed");
-});
-
-test("параллельное создание и обновление записей не теряет lease", async (t) => {
-  const f = await fixture(t);
-  const created = await Promise.all(
-    ["one", "two"].map((branch) => createWorktree(f.repo, { branch, owner: branch, home: f.home })),
-  );
-  await Promise.all(
-    created.map((item) =>
-      updateRecord(f.repo, item.worktreePath, { sessionId: `ses_${item.branch}` }, item.owner),
-    ),
-  );
-  const items = await listWorktrees(f.repo);
-  assert.deepEqual(
-    items
-      .filter((item) => item.state)
-      .map((item) => item.state.sessionId)
-      .sort(),
-    ["ses_one", "ses_two"],
+    { code: "invalid_name" },
   );
 });
 
-test("CLI возвращает exit 0 и чистый JSON с корректным экранированием", async (t) => {
+test("список и поиск используют реестр Git, включая вручную созданные worktree", async (t) => {
   const f = await fixture(t);
-  const output = execFileSync(
-    process.execPath,
-    [bin, "--json", "--slug", "cli", "--path", path.join(f.root, 'my "worktree"')],
-    { cwd: f.repo, env: { ...identity, HOME: f.home }, encoding: "utf8" },
-  );
-  assert.equal(JSON.parse(output).ok, true);
-  const listed = JSON.parse(
-    execFileSync(process.execPath, [bin, "list", "--json", "--status"], {
-      cwd: f.repo,
-      env: identity,
-      encoding: "utf8",
-    }),
-  );
-  assert.equal(listed.worktrees.length, 2);
-  const text = execFileSync(
-    process.execPath,
-    [bin, "без lease", "--from", "HEAD", "--path", path.join(f.root, "text-output")],
-    { cwd: f.repo, env: { ...identity, HOME: f.home }, encoding: "utf8" },
-  );
-  assert.equal(JSON.parse(text).branch, "bez-lease");
-});
-
-test("плагин не удаляет worktree по idle чужой сессии и поддерживает две pending-операции", async (t) => {
-  const f = await fixture(t);
-  const oldHome = process.env.HOME;
-  process.env.HOME = f.home;
-  t.after(() => {
-    if (oldHome === undefined) delete process.env.HOME;
-    else process.env.HOME = oldHome;
+  const target = path.join(f.root, 'my "worktree"');
+  git(["worktree", "add", "-b", "manual", target], f.repo);
+  assert.equal((await listWorktrees(f.repo)).length, 2);
+  assert.equal((await resolveWorktree(f.repo, "manual")).worktreePath, target);
+  assert.equal((await resolveWorktree(f.repo, target)).branch, "manual");
+  assert.deepEqual(await inspectHooks(f.repo, "manual"), {
+    worktreePath: target,
+    snapshot: "absent",
+    postCreate: "unknown",
+    preRemove: "unknown",
   });
-  const logs = [];
-  const client = {
-    app: {
-      log: async (entry) => {
-        logs.push(entry);
-      },
-    },
-  };
-  const pluginOptions = {
-    terminal: "none",
-    forkSession: false,
-    worktreeDir: path.join(f.root, "trees"),
-  };
-  const plugin = await GitwtPlugin(
-    { client, project: { id: "project" }, directory: f.repo },
-    pluginOptions,
-  );
-  const contexts = ["one", "two"].map((sessionID) => ({
-    directory: f.repo,
-    sessionID,
-    abort: new AbortController().signal,
-  }));
-  const created = [];
-  for (const context of contexts) {
-    const result = JSON.parse(
-      await plugin.tool.gitwt_create.execute({ branch: context.sessionID, open: false }, context),
-    );
-    assert.equal(result.ok, true, result.error);
-    created.push(result);
-  }
-  for (let index = 0; index < contexts.length; index += 1) {
-    const context = { ...contexts[index], directory: created[index].worktreePath };
-    const result = JSON.parse(
-      await plugin.tool.gitwt_remove.execute({ branch: context.sessionID }, context),
-    );
-    assert.equal(result.pending, true);
-  }
-  await plugin.event({ event: { type: "session.idle", properties: { sessionID: "other" } } });
-  await plugin.event({ event: { type: "session.idle", properties: {} } });
-  assert.equal((await listWorktrees(f.repo)).length, 3);
-  await plugin.event({ event: { type: "session.idle", properties: { sessionID: "one" } } });
-  assert.deepEqual((await listWorktrees(f.repo)).map((item) => item.branch).sort(), [
-    "main",
-    "two",
-  ]);
-  await plugin.event({ event: { type: "session.idle", properties: { sessionID: "two" } } });
-  assert.equal((await listWorktrees(f.repo)).length, 1);
-  assert.equal(logs.length, 0);
+  await assert.rejects(resolveWorktree(f.repo, "missing"), { code: "worktree_missing" });
 });
 
-test("ошибка отложенного удаления сохраняет worktree и снимает только pending-флаг", async (t) => {
+test("конфиг объединяет global/project/аргументы и сохраняет независимые списки хуков", async (t) => {
   const f = await fixture(t);
-  const result = await createWorktree(f.repo, {
-    branch: "pending",
-    owner: "session",
+  await mkdir(path.join(f.home, ".config/opencode"), { recursive: true });
+  await mkdir(path.join(f.repo, ".opencode"));
+  await writeFile(
+    path.join(f.home, ".config/opencode/gitwt.jsonc"),
+    '{"prefix":"global/","hooks":{"postCreate":["true"]}}',
+  );
+  await writeFile(
+    path.join(f.repo, ".opencode/gitwt.jsonc"),
+    '{"prefix":"project/","hooks":{"preRemove":["true"]}}',
+  );
+  const config = await loadConfig(f.repo, { prefix: "cli/", worktreeDir: "~/copies" }, f.home);
+  assert.equal(config.prefix, "cli/");
+  assert.equal(config.worktreeDir, path.join(f.home, "copies"));
+  assert.deepEqual(config.hooks, { postCreate: ["true"], preRemove: ["true"] });
+  await writeFile(path.join(f.repo, ".opencode/gitwt.jsonc"), '{"base":}');
+  await assert.rejects(loadConfig(f.repo, {}, f.home), { code: "invalid_config" });
+});
+
+test("занятый путь не перезаписывается, пробелы и кавычки в новом пути сохраняются", async (t) => {
+  const f = await fixture(t);
+  const target = path.join(f.root, 'my "copy"');
+  const created = await createWorktree(f.repo, {
+    branch: "spaces",
+    path: target,
+    from: "HEAD",
     home: f.home,
   });
-  await updateRecord(
-    f.repo,
-    result.worktreePath,
-    { pendingRemove: { sessionId: "session", owner: "session" } },
-    "session",
-  );
-  await writeFile(path.join(result.worktreePath, "unsaved.txt"), "Не удалять");
-  const plugin = await GitwtPlugin({
-    client: { app: { log: async () => {} } },
-    project: { id: "project" },
-    directory: f.repo,
-  });
-  await plugin.event({ event: { type: "session.idle", properties: { sessionID: "session" } } });
-  const record = (await listWorktrees(f.repo)).find((item) => item.branch === "pending").state;
-  assert.equal(record.pendingRemove, null);
-  assert.equal(record.status, "remove_failed");
-  assert.equal(await readFile(path.join(result.worktreePath, "unsaved.txt"), "utf8"), "Не удалять");
-});
-
-test("ошибка Git после checkout не оставляет worktree без lease", async (t) => {
-  const f = await fixture(t);
-  await writeFile(path.join(f.repo, ".git/hooks/post-checkout"), "#!/bin/sh\nexit 9\n", {
-    mode: 0o755,
-  });
+  assert.equal(created.worktreePath, target);
   await assert.rejects(
-    createWorktree(f.repo, { branch: "partial", owner: "agent", home: f.home }),
-    { code: "worktree_create_failed" },
+    createWorktree(f.repo, { branch: "other", path: target, from: "HEAD", home: f.home }),
+    { code: "worktree_exists" },
   );
-  const item = (await listWorktrees(f.repo)).find((entry) => entry.branch === "partial");
-  assert.equal(item.state.owner, "agent");
-  assert.equal(item.state.status, "verification_failed");
-  await assert.rejects(removeWorktree(f.repo, "partial", { home: f.home }), {
-    code: "lease_conflict",
-  });
+  assert.equal((await resolveWorktree(f.repo, target)).branch, "spaces");
 });
 
-test("удаление использует preRemove из настроек создания worktree", async (t) => {
+test("хуки получают окружение, а preRemove сохраняется независимо от нового конфига", async (t) => {
   const f = await fixture(t);
-  const marker = path.join(f.root, "removed.txt");
+  const marker = path.join(f.root, "marker.json");
+  const removed = path.join(f.root, "removed.txt");
   const created = await createWorktree(f.repo, {
-    branch: "snapshot-hooks",
+    branch: "hooks",
+    from: "HEAD",
     home: f.home,
     config: {
       hooks: {
+        postCreate: [
+          command(
+            `require("fs").writeFileSync(${JSON.stringify(marker)}, JSON.stringify({branch:process.env.BRANCH,path:process.env.WORKTREE_PATH,head:process.env.HEAD,source:process.env.SOURCE_PATH}))`,
+          ),
+        ],
         preRemove: [
-          [
-            process.execPath,
-            "-e",
-            `require("fs").writeFileSync(${JSON.stringify(marker)}, "Исходный хук")`,
-          ],
+          command(`require("fs").writeFileSync(${JSON.stringify(removed)}, "Сохранённый хук")`),
         ],
       },
     },
   });
-  await removeWorktree(f.repo, created.branch, { home: f.home });
-  assert.equal(await readFile(marker, "utf8"), "Исходный хук");
+  assert.deepEqual(JSON.parse(await readFile(marker, "utf8")), {
+    branch: "hooks",
+    path: created.worktreePath,
+    head: created.head,
+    source: f.repo,
+  });
+  await mkdir(path.join(f.repo, ".opencode"));
+  await writeFile(path.join(f.repo, ".opencode/gitwt.jsonc"), '{"hooks":{"preRemove":["exit 9"]}}');
+  await removeWorktree(f.repo, "hooks");
+  assert.equal(await readFile(removed, "utf8"), "Сохранённый хук");
 });
 
-test("команда запуска плагина сохраняет бинарник и профиль OCX", async (t) => {
+test("noHooks сохраняет явное отключение, а ошибка postCreate оставляет worktree с предупреждением", async (t) => {
   const f = await fixture(t);
-  const previous = Object.fromEntries(
-    ["OCX_CONTEXT", "OCX_BIN", "OCX_PROFILE", "HOME"].map((key) => [key, process.env[key]]),
+  const config = {
+    hooks: { postCreate: [command("process.exit(9)")], preRemove: [command("process.exit(9)")] },
+  };
+  const disabled = await createWorktree(f.repo, {
+    branch: "disabled",
+    from: "HEAD",
+    noHooks: true,
+    home: f.home,
+    config,
+  });
+  assert.deepEqual(disabled.warnings, []);
+  assert.equal((await inspectHooks(f.repo, "disabled")).preRemove, "none");
+  await removeWorktree(f.repo, "disabled");
+  const failed = await createWorktree(f.repo, {
+    branch: "post-failed",
+    from: "HEAD",
+    home: f.home,
+    config,
+  });
+  assert.equal(failed.warnings.length, 1);
+  assert.equal((await resolveWorktree(f.repo, "post-failed")).head, failed.head);
+  await assert.rejects(removeWorktree(f.repo, "post-failed", { force: true }), {
+    code: "command_failed",
+  });
+});
+
+test("dirty и изменения preRemove блокируют удаление; force не обходит ошибку хука", async (t) => {
+  const f = await fixture(t);
+  const created = await createWorktree(f.repo, { branch: "dirty", from: "HEAD", home: f.home });
+  await writeFile(path.join(created.worktreePath, "unsaved.txt"), "Не сохранено");
+  await assert.rejects(removeWorktree(f.repo, "dirty"), { code: "worktree_dirty" });
+  assert.equal(
+    (await listWorktrees(f.repo, { status: true })).find((item) => item.branch === "dirty").dirty,
+    true,
   );
-  Object.assign(process.env, {
-    HOME: f.home,
-    OCX_CONTEXT: "1",
-    OCX_BIN: process.execPath,
-    OCX_PROFILE: "profile",
+  const before = git(["rev-list", "--all", "--count"], f.repo);
+  await removeWorktree(f.repo, "dirty", { force: true });
+  assert.equal(git(["rev-list", "--all", "--count"], f.repo), before);
+  const hooked = await createWorktree(f.repo, {
+    branch: "hooked",
+    from: "HEAD",
+    home: f.home,
+    config: {
+      hooks: { preRemove: [command('require("fs").writeFileSync("new.txt", "Изменение")')] },
+    },
   });
-  t.after(() => {
-    for (const [key, value] of Object.entries(previous)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
+  await assert.rejects(removeWorktree(f.repo, "hooked"), { code: "worktree_dirty" });
+  assert.equal(await readFile(path.join(hooked.worktreePath, "new.txt"), "utf8"), "Изменение");
+});
+
+test("текущий checkout защищён; неслитая ветка сохраняется, слитая удаляется", async (t) => {
+  const f = await fixture(t);
+  await assert.rejects(removeWorktree(f.repo, "main", { force: true }), {
+    code: "protected_worktree",
   });
+  const created = await createWorktree(f.repo, { branch: "feature", from: "HEAD", home: f.home });
+  await assert.rejects(removeWorktree(created.worktreePath, "feature"), {
+    code: "protected_worktree",
+  });
+  await writeFile(path.join(created.worktreePath, "feature.txt"), "Фича");
+  git(["add", "."], created.worktreePath);
+  git(["commit", "-m", "Фича"], created.worktreePath);
+  const result = await removeWorktree(f.repo, "feature");
+  assert.equal(result.branchDeleted, false);
+  assert.equal(result.warnings.length, 1);
+  git(["merge", "--ff-only", "feature"], f.repo);
+  const merged = await createWorktree(f.repo, { branch: "merged", from: "HEAD", home: f.home });
+  assert.equal((await removeWorktree(f.repo, merged.worktreePath)).branchDeleted, true);
+});
+
+test("ошибки checkout и повреждённые снимки не приводят к автоматическому удалению", async (t) => {
+  const f = await fixture(t);
+  const created = await createWorktree(f.repo, { branch: "snapshot", from: "HEAD", home: f.home });
+  const snapshot = git(
+    ["rev-parse", "--path-format=absolute", "--git-path", "opencode-gitwt-hooks.json"],
+    created.worktreePath,
+  );
+  await writeFile(snapshot, "{");
+  await assert.rejects(removeWorktree(f.repo, "snapshot", { force: true }), {
+    code: "invalid_hooks",
+  });
+  await writeFile(path.join(f.repo, ".git/hooks/post-checkout"), "#!/bin/sh\nexit 9\n", {
+    mode: 0o755,
+  });
+  await assert.rejects(createWorktree(f.repo, { branch: "partial", from: "HEAD", home: f.home }), {
+    code: "worktree_create_failed",
+  });
+  assert.equal((await listWorktrees(f.repo)).length, 3);
+});
+
+test("CLI add/list/cd выдаёт чистый машинный вывод, не меняя cwd вызывающего процесса", async (t) => {
+  const f = await fixture(t);
+  await mkdir(path.join(f.repo, ".opencode"));
+  await writeFile(
+    path.join(f.repo, ".opencode/gitwt.jsonc"),
+    JSON.stringify({ hooks: { postCreate: [command('process.stdout.write("Вывод хука\\n")')] } }),
+  );
+  const target = path.join(f.root, "CLI worktree");
+  const env = { ...identity, HOME: f.home };
+  const invoke = (args) =>
+    execFileSync(process.execPath, [bin, ...args], { cwd: f.repo, env, encoding: "utf8" });
+  const receipt = JSON.parse(invoke(["add", "cli", "--from", "HEAD", "--path", target, "--json"]));
+  assert.equal(receipt.worktreePath, target);
+  assert.equal(invoke(["cd", "cli"]), `${target}\n`);
+  assert.equal(JSON.parse(invoke(["list", "--porcelain"])).length, 2);
+  assert.equal(git(["branch", "--show-current"], f.repo), "main");
+});
+
+test("обёртка OpenCode возвращает путь и работает без клиента, сессий и idle-хуков", async (t) => {
+  const f = await fixture(t);
   const plugin = await GitwtPlugin(
-    { client: {}, project: { id: "project" }, directory: f.repo },
-    { terminal: "none", forkSession: false, worktreeDir: path.join(f.root, "trees") },
+    { directory: f.repo },
+    { worktreeDir: path.join(f.root, "copies") },
   );
-  const result = JSON.parse(
-    await plugin.tool.gitwt_create.execute(
-      { branch: "ocx", open: false },
-      { sessionID: "session", directory: f.repo },
-    ),
+  const ctx = { directory: f.repo, sessionID: "same-session", abort: new AbortController().signal };
+  const before = process.cwd();
+  const receipt = JSON.parse(
+    await plugin.tool.gitwt_create.execute({ branch: "agent", from: "HEAD", noHooks: true }, ctx),
   );
-  assert.equal(result.ok, true, result.error);
-  assert.deepEqual(result.command, [process.execPath, "opencode", "-p", "profile"]);
+  const found = JSON.parse(await plugin.tool.gitwt_cd.execute({ target: "agent" }, ctx));
+  assert.equal(found.worktreePath, receipt.worktreePath);
+  assert.equal(ctx.directory, f.repo);
+  assert.equal(ctx.sessionID, "same-session");
+  assert.equal(process.cwd(), before);
+  assert.equal(plugin.event, undefined);
+  assert.equal((await listWorktrees(f.repo)).length, 2);
+  const removed = JSON.parse(await plugin.tool.gitwt_remove.execute({ target: "agent" }, ctx));
+  assert.equal(removed.branchDeleted, true);
 });
