@@ -15,7 +15,7 @@ const MOVE_PATH = "/experimental/control-plane/move-session";
 
 function createRoot() {
   fs.mkdirSync(TEMP_BASE, { recursive: true });
-  return fs.mkdtempSync(path.join(TEMP_BASE, "gitwt-session-"));
+  return fs.realpathSync(fs.mkdtempSync(path.join(TEMP_BASE, "gitwt-session-")));
 }
 
 function expectCode(code) {
@@ -399,8 +399,15 @@ function freePort() {
 }
 
 function isolatedEnv(root) {
+  const home = path.join(root, "home");
+  const npmrc = path.join(root, "npmrc");
+  fs.mkdirSync(home, { recursive: true });
+  fs.writeFileSync(npmrc, "");
   return {
     ...process.env,
+    HOME: home,
+    OPENCODE_TEST_HOME: home,
+    NPM_CONFIG_USERCONFIG: npmrc,
     XDG_DATA_HOME: path.join(root, "data"),
     XDG_CONFIG_HOME: path.join(root, "config"),
     XDG_CACHE_HOME: path.join(root, "cache"),
@@ -409,7 +416,10 @@ function isolatedEnv(root) {
     OPENCODE_CONFIG_CONTENT: JSON.stringify({
       $schema: "https://opencode.ai/config.json",
       plugin: [
-        [pathToFileURL(path.resolve("src/index.js")).href, { terminal: "none", forkSession: true }],
+        [
+          process.env.GITWT_TEST_PLUGIN_SPEC ?? pathToFileURL(path.resolve("src/index.js")).href,
+          { terminal: "none", forkSession: true },
+        ],
       ],
     }),
   };
@@ -417,24 +427,31 @@ function isolatedEnv(root) {
 
 function startServer(env, cwd, port) {
   return new Promise((resolve, reject) => {
-    const child = spawn("opencode", ["serve", "--port", String(port), "--hostname", "127.0.0.1"], {
-      cwd,
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const child = spawn(
+      "opencode",
+      ["serve", "--print-logs", "--port", String(port), "--hostname", "127.0.0.1"],
+      {
+        cwd,
+        env,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
     let output = "";
+    let settled = false;
     const timer = setTimeout(() => finish(new Error("сервер не запустился")), 20000);
     const onData = (chunk) => {
-      output += chunk.toString();
+      output = (output + chunk.toString()).slice(-16000);
       const match = output.match(/listening on (http:\/\/\S+)/);
       if (match) finish(null, match[1]);
     };
     function finish(error, url) {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
-      child.stdout.off("data", onData);
-      child.stderr.off("data", onData);
-      if (error) reject(error);
-      else resolve({ child, url });
+      if (error) {
+        child.kill("SIGTERM");
+        reject(error);
+      } else resolve({ child, url, output: () => output });
     }
     child.stdout.on("data", onData);
     child.stderr.on("data", onData);
@@ -531,6 +548,18 @@ test("изоляция: реальный opencode serve переносит се�
   const client = createHttpClient(server.url);
   const source = fs.realpathSync(repo);
   const target = fs.realpathSync(worktree);
+  const eventsAbort = new AbortController();
+  const events = await fetch(`${server.url}/global/event`, { signal: eventsAbort.signal });
+  let eventOutput = "";
+  const observe = async () => {
+    try {
+      for await (const chunk of events.body) {
+        eventOutput = (eventOutput + new TextDecoder().decode(chunk)).slice(-16000);
+      }
+    } catch {}
+  };
+  observe();
+  t.after(() => eventsAbort.abort());
 
   const tools = await fetch(
     `${server.url}/experimental/tool/ids?directory=${encodeURIComponent(source)}`,
@@ -538,7 +567,7 @@ test("изоляция: реальный opencode serve переносит се�
   for (const name of ["gitwt_create", "gitwt_list", "gitwt_remove"]) {
     assert.ok(
       tools.includes(name),
-      `Инструмент ${name} не зарегистрирован: ${JSON.stringify(tools)}`,
+      `Инструмент ${name} не зарегистрирован: ${JSON.stringify(tools)}\n${server.output()}\n${eventOutput}`,
     );
   }
 
