@@ -272,7 +272,8 @@ function copyContext({ dataRoot, projectId, rootSessionId, newSessionId, created
           },
         );
       }
-      ensureDirTracked(targetBase, createdDirs);
+      ensureDirTracked(name ? targetBase : path.dirname(targetBase), createdDirs);
+      if (!name) createdDirs.push(targetBase);
       fs.cpSync(source, target, { recursive: true, force: false, errorOnExist: true });
     } catch (error) {
       if (error instanceof GitwtError) throw error;
