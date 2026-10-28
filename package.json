@@ -1,0 +1,57 @@
+{
+  "name": "opencode-gitwt",
+  "version": "0.1.0",
+  "description": "Git worktree для OpenCode: изоляция сессий, подготовка окружения и явная очистка",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./server": "./src/index.js"
+  },
+  "bin": {
+    "git-wt": "./bin/git-wt.js"
+  },
+  "files": [
+    "src",
+    "bin",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.14.0",
+    "opencode": ">=1.19.3 <2"
+  },
+  "scripts": {
+    "check": "biome check .",
+    "test": "node --test",
+    "release": "node scripts/release.js"
+  },
+  "dependencies": {
+    "jsonc-parser": "3.3.1",
+    "proper-lockfile": "4.1.2",
+    "yaml": "2.8.1",
+    "zod": "4.1.8"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://git@git.sourcecraft.dev/voischev/opencode-gitwt.git"
+  },
+  "homepage": "https://sourcecraft.dev/voischev/opencode-gitwt",
+  "bugs": {
+    "url": "https://sourcecraft.dev/voischev/opencode-gitwt/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "git",
+    "worktree"
+  ],
+  "license": "MIT"
+}
