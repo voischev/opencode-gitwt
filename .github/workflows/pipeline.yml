@@ -1,0 +1,63 @@
+name: pipeline
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - run: npm ci --ignore-scripts
+      - run: npm run check
+      - run: npm test
+      - run: npm run release -- --check
+
+  mirror:
+    if: github.event_name == 'push'
+    needs: checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Mirror to SourceCraft
+        env:
+          SOURCECRAFT_TOKEN: ${{ secrets.SOURCECRAFT_TOKEN }}
+          SOURCECRAFT_OWNER: voischev
+        run: bash scripts/mirror-sourcecraft.sh
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - checks
+      - mirror
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - run: npm ci --ignore-scripts
+      - name: Publish to npm
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: npm run release
