@@ -22,7 +22,7 @@ const REPO_ROOT = join(import.meta.dirname, "..");
 const PACKAGE = JSON.parse(await readFile(join(REPO_ROOT, "package.json"), "utf8"));
 const SHA = "a".repeat(40);
 const TARBALL_NAME = `${PACKAGE.name}-${PACKAGE.version}.tgz`;
-const PACK_FILES = [{ path: "package.json" }, { path: "src/index.js" }, { path: "bin/git-wt.js" }];
+const PACK_FILES = [{ path: "package.json" }, { path: "src/index.js" }];
 const FETCH_MAIN = ["fetch", "--no-tags", "origin", "main:refs/remotes/origin/main"];
 
 function createRunner({
@@ -78,8 +78,8 @@ function createRunner({
 
 function releaseEnv(extra = {}) {
   return {
-    SOURCECRAFT_COMMIT_REF_NAME: expectedTag(PACKAGE.version),
-    SOURCECRAFT_COMMIT_SHA: SHA,
+    RELEASE_TAG: expectedTag(PACKAGE.version),
+    RELEASE_SHA: SHA,
     NPM_TOKEN: "granular-token-value",
     ...extra,
   };
@@ -108,18 +108,18 @@ describe("проверка тега релиза", () => {
 });
 
 describe("сверка HEAD, тега и SHA", () => {
-  it("совпадающие HEAD, тег и SOURCECRAFT_COMMIT_SHA проходят", async () => {
+  it("совпадающие HEAD, тег и RELEASE_SHA проходят", async () => {
     const { runner } = createRunner();
     const sha = await resolveCommits({
       runner,
       cwd: REPO_ROOT,
       tag: "v0.1.0",
-      env: { SOURCECRAFT_COMMIT_SHA: SHA },
+      env: { RELEASE_SHA: SHA },
     });
     assert.equal(sha, SHA);
   });
 
-  it("без SOURCECRAFT_COMMIT_SHA сверяются только HEAD и тег", async () => {
+  it("без RELEASE_SHA сверяются только HEAD и тег", async () => {
     const { runner } = createRunner();
     const sha = await resolveCommits({ runner, cwd: REPO_ROOT, tag: "v0.1.0", env: {} });
     assert.equal(sha, SHA);
@@ -132,7 +132,7 @@ describe("сверка HEAD, тега и SHA", () => {
     });
   });
 
-  it("расхождение SOURCECRAFT_COMMIT_SHA и коммита тега отклоняется", async () => {
+  it("расхождение RELEASE_SHA и коммита тега отклоняется", async () => {
     const { runner } = createRunner();
     await assert.rejects(
       () =>
@@ -140,7 +140,7 @@ describe("сверка HEAD, тега и SHA", () => {
           runner,
           cwd: REPO_ROOT,
           tag: "v0.1.0",
-          env: { SOURCECRAFT_COMMIT_SHA: "c".repeat(40) },
+          env: { RELEASE_SHA: "c".repeat(40) },
         }),
       { code: "release_sha_mismatch" },
     );
@@ -216,9 +216,9 @@ describe("точки входа и секреты в пакете", () => {
     const pkg = {
       main: "./src/index.js",
       exports: { ".": "./src/index.js", "./server": "./src/index.js" },
-      bin: { "git-wt": "./bin/git-wt.js" },
+      bin: { gitwt: "./bin/gitwt.js" },
     };
-    assert.deepEqual(collectEntryPoints(pkg).sort(), ["bin/git-wt.js", "src/index.js"]);
+    assert.deepEqual(collectEntryPoints(pkg).sort(), ["bin/gitwt.js", "src/index.js"]);
   });
 
   it("отсутствующая точка входа в упаковке отклоняется", () => {
@@ -365,7 +365,7 @@ describe("сценарий релиза", () => {
       release({
         runner,
         cwd: REPO_ROOT,
-        env: releaseEnv({ SOURCECRAFT_COMMIT_REF_NAME: "v9.9.9" }),
+        env: releaseEnv({ RELEASE_TAG: "v9.9.9" }),
         dryRun: true,
         log: () => {},
       }),
@@ -380,7 +380,7 @@ describe("сценарий релиза", () => {
       release({
         runner,
         cwd: REPO_ROOT,
-        env: releaseEnv({ SOURCECRAFT_COMMIT_REF_NAME: "" }),
+        env: releaseEnv({ RELEASE_TAG: "" }),
         dryRun: true,
         log: () => {},
       }),

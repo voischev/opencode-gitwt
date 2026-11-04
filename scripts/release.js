@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { GitwtError, run as runCommand } from "../src/process.js";
+import { GitwtError, run as runCommand } from "./process.js";
 
 export const NPM_REGISTRY = "https://registry.npmjs.org/";
 
@@ -19,7 +19,7 @@ export function validateTag({ tag, version }) {
   if (!tag) {
     throw new GitwtError(
       "release_tag_missing",
-      "Не задано имя тега релиза: переменная SOURCECRAFT_COMMIT_REF_NAME пуста",
+      "Не задано имя тега релиза: переменная RELEASE_TAG пуста",
     );
   }
   if (tag !== expectedTag(version)) {
@@ -118,11 +118,11 @@ export async function resolveCommits({ runner = runCommand, cwd, tag, env = proc
       `HEAD (${head}) не совпадает с коммитом тега ${tag} (${tagSha})`,
     );
   }
-  const declared = (env.SOURCECRAFT_COMMIT_SHA ?? "").trim();
+  const declared = (env.RELEASE_SHA ?? "").trim();
   if (declared && declared !== head) {
     throw new GitwtError(
       "release_sha_mismatch",
-      `SOURCECRAFT_COMMIT_SHA (${declared}) не совпадает с коммитом тега (${head})`,
+      `RELEASE_SHA (${declared}) не совпадает с коммитом тега (${head})`,
     );
   }
   return head;
@@ -222,10 +222,10 @@ async function publishPackage({ runner, cwd, tarball, env }) {
   if (!env.NPM_TOKEN) {
     throw new GitwtError(
       "release_token_missing",
-      "Не задан NPM_TOKEN: добавьте granular-токен npm в секрет SourceCraft",
+      "Не задан NPM_TOKEN: добавьте granular-токен npm в GitHub secret NPM_TOKEN",
     );
   }
-  const dir = await mkdtemp(join(tmpdir(), "opencode-gitwt-npmrc-"));
+  const dir = await mkdtemp(join(tmpdir(), "gitwt-npmrc-"));
   const npmrc = join(dir, ".npmrc");
   await writeFile(npmrc, buildNpmrc(), { mode: 0o600 });
   try {
@@ -251,13 +251,13 @@ export async function release(options = {}) {
   const log = options.log ?? defaultLog;
 
   const pkg = await readPackage(cwd);
-  const tag = validateTag({ tag: env.SOURCECRAFT_COMMIT_REF_NAME, version: pkg.version });
+  const tag = validateTag({ tag: env.RELEASE_TAG, version: pkg.version });
   const sha = await resolveCommits({ runner, cwd, tag, env });
   await fetchMain({ runner, cwd });
   await assertAncestor({ runner, cwd, sha });
   await assertNotPublished({ runner, cwd, name: pkg.name, version: pkg.version });
 
-  const dir = await mkdtemp(join(tmpdir(), "opencode-gitwt-pack-"));
+  const dir = await mkdtemp(join(tmpdir(), "gitwt-pack-"));
   try {
     const tarball = await packPackage({ runner, cwd, pkg, dir });
     if (dryRun) {

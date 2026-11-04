@@ -1,68 +1,53 @@
 # opencode-gitwt
 
-A standalone `git worktree` CLI with an optional OpenCode plugin.
-Create a branch, verify its checkout, and keep working in the returned directory.
+OpenCode adapter for `gitwt`. It exposes the shared worktree core as agent tools:
+https://github.com/voischev/gitwt
 
-Requires Node.js 22.14+ and Git. The plugin supports OpenCode 1.19.3–<2.
+Requires Node.js 22.14+ and Git. Supports OpenCode 1.19.3–<2.
 
-## CLI
+## Use in OpenCode
 
-```sh
-npm install -g opencode-gitwt
-git-wt add feature/login --base main --json
-git-wt list --status --json
-git-wt cd feature/login
-git-wt remove feature/login
-```
-
-`add` creates a new branch from a freshly fetched remote base and verifies the
-checkout. Use `--from <ref>` for a local ref or commit, `--path` for an exact
-destination, or `--dir` for a base directory. `cd` prints the path; `--json`
-provides machine-readable output.
-
-Removal protects the main/current checkout and local changes. `--force` allows
-discarding changes; unmerged branches are kept. Use `--keep-branch` to preserve
-the branch regardless of merge status.
-
-## OpenCode
-
-Add to `opencode.json`, then restart OpenCode:
+Add the plugin to your project's `opencode.json`, then restart OpenCode:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["opencode-gitwt@0.1.0"]
+  "plugin": ["opencode-gitwt@latest"]
 }
 ```
 
-Exposes `gitwt_create`, `gitwt_list`, `gitwt_cd`, and `gitwt_remove` as agent tools.
-Use the returned `worktreePath` as the command working directory or in file paths;
-the current session stays in place.
+Ask the agent in chat, for example:
 
-## Configuration and hooks
+> Create a worktree on branch feature/login from main, fix the login issue there,
+> and run the tests. Keep the worktree for review.
 
-Project settings: `.opencode/gitwt.jsonc`. Global defaults:
-`~/.config/opencode/gitwt.jsonc`. Options: `remote`, `base`, `prefix`,
-`worktreeDir`, and `hooks`.
+The agent calls `gitwt_create` with `{"branch":"feature/login","base":"main"}`.
+Use the returned `worktreePath` as the cwd for commands and as the base for
+absolute paths in file operations. Continue in the same session; approve access
+to that directory if OpenCode asks. `gitwt_cd` only returns the path and does not
+change the session directory. Use `gitwt_list` to inspect copies and
+`gitwt_remove` only on explicit request when the worktree is no longer in use.
 
-```json
-{ "hooks": { "postCreate": [["npm", "ci"]] } }
-```
+## Tools
 
-Hooks accept argument arrays or shell commands. Each worktree saves its own
-`postCreate`/`preRemove` snapshot; `add --no-hooks` disables both for that copy.
-A failed `postCreate` returns a warning; a failed `preRemove` blocks removal even
-with `--force`. Inspect settings with `git-wt config` and snapshots with
-`git-wt hooks <branch-or-path>`.
+- `gitwt_create` creates and verifies a worktree.
+- `gitwt_list` shows registered worktrees with optional status.
+- `gitwt_cd` resolves a branch or full path without changing cwd.
+- `gitwt_remove` removes a worktree explicitly, optionally with `force`.
 
-## Development and releases
+## Configuration
 
-```sh
-npm ci --ignore-scripts
-npm run check
-npm test
-node scripts/release.js --check
-```
+The plugin uses the shared gitwt configuration: `.gitwt.jsonc` in the project
+and `~/.config/gitwt/config.jsonc` globally. Options include `remote`, `base`,
+`prefix`, `worktreeDir`, and `hooks`. See the core repository for details.
 
-Version tags (`vX.Y.Z`) on `main` publish through SourceCraft CI using the
-repository's `NPM_TOKEN` secret.
+For the standalone `gitwt` command, run `npm install -g @voischev/gitwt`.
+Upgrading from 0.1.x: move `.opencode/gitwt.jsonc` to `.gitwt.jsonc` and global
+settings from `~/.config/opencode/gitwt.jsonc` to `~/.config/gitwt/config.jsonc`.
+
+## Development
+
+GitHub is the primary repository; SourceCraft is a mirror. Releases publish to
+npm from GitHub with `NPM_TOKEN`.
+
+Run `npm ci --ignore-scripts`, `npm run check`, and `npm test`.

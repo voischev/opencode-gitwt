@@ -1,5 +1,5 @@
+import { createWorktree, listWorktrees, removeWorktree, resolveWorktree } from "@voischev/gitwt";
 import { z } from "zod";
-import { createWorktree, listWorktrees, removeWorktree, resolveWorktree } from "./worktree.js";
 
 export async function GitwtPlugin({ directory }, config = {}) {
   return {
@@ -28,7 +28,7 @@ export async function GitwtPlugin({ directory }, config = {}) {
       },
       gitwt_list: {
         description:
-          "Показать worktree из реестра Git. status добавляет dirty и доступные ahead/behind; отсутствие этих полей означает неизвестное состояние.",
+          "Показать worktree из реестра Git. status проверяет dirty и доступные ahead/behind; null означает неизвестное состояние.",
         args: { status: z.boolean().optional() },
         execute: async (args, ctx) =>
           JSON.stringify(await listWorktrees(ctx.directory ?? directory, args)),
