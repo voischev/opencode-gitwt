@@ -29,16 +29,25 @@ jobs:
   integration:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: "1.19.3"
+            package: "opencode-ai@1.19.3"
+          - version: "2.2.5"
+            package: "@opencode/cli@2.2.5"
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
           node-version: 24
       - run: npm ci --ignore-scripts
-      - run: npm install --global opencode-ai@1.19.3 --no-audit --no-fund
+      - run: npm install --global "${{ matrix.package }}" --no-audit --no-fund
       - name: Проверить интеграцию с OpenCode
         env:
           GITWT_REQUIRE_OPENCODE: "1"
+          GITWT_OPENCODE_VERSION: ${{ matrix.version }}
         run: node --test test/plugin.test.js
 
   mirror:

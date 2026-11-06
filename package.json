@@ -1,6 +1,6 @@
 {
   "name": "opencode-gitwt",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Git worktree tools for OpenCode, powered by gitwt",
   "type": "module",
   "main": "./src/index.js",
@@ -15,7 +15,7 @@
   ],
   "engines": {
     "node": ">=22.14.0",
-    "opencode": ">=1.19.3 <2"
+    "opencode": ">=1.19.3 <2 || >=2.2.5 <3"
   },
   "scripts": {
     "check": "biome check .",

@@ -102,4 +102,29 @@ export async function GitwtPlugin({ directory }, config = {}) {
   };
 }
 
-export default { id: "opencode-gitwt", server: GitwtPlugin };
+export default {
+  id: "opencode-gitwt",
+  server: GitwtPlugin,
+  async setup(ctx) {
+    const directory = ctx.location.directory;
+    const hooks = await GitwtPlugin({ directory }, ctx.options);
+    const definitions = [];
+    for (const [name, definition] of Object.entries(hooks.tool)) {
+      const output = {};
+      await hooks["tool.definition"]({ toolID: name }, output);
+      definitions.push({
+        name,
+        description: definition.description,
+        input: output.jsonSchema,
+        options: { codemode: false },
+        async execute(args, call) {
+          call.signal.throwIfAborted();
+          return { content: await definition.execute(args, { directory, abort: call.signal }) };
+        },
+      });
+    }
+    await ctx.tool.transform((editor) => {
+      for (const definition of definitions) editor.add(definition);
+    });
+  },
+};

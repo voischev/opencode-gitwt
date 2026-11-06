@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promi
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { GitwtPlugin } from "../src/index.js";
+import pluginModule, { GitwtPlugin } from "../src/index.js";
 
 test("адаптер создаёт, находит и удаляет worktree через gitwt", async (t) => {
   const base = path.join(os.tmpdir(), "opencode");
@@ -92,4 +92,31 @@ test("адаптер создаёт, находит и удаляет worktree �
   assert.equal(ctx.sessionID, "same-session");
   assert.equal(process.cwd(), before);
   assert.equal(plugin.event, undefined);
+});
+
+test("адаптер V2 регистрирует общие схемы и передаёт отмену до Git-операций", async () => {
+  const tools = new Map();
+  await pluginModule.setup({
+    location: { directory: "/not-a-repository" },
+    options: {},
+    tool: {
+      transform: async (register) => register({ add: (tool) => tools.set(tool.name, tool) }),
+    },
+  });
+  assert.equal(tools.size, 4);
+  assert.deepEqual(tools.get("gitwt_create").input.required, ["branch"]);
+  assert.equal(tools.get("gitwt_remove").options.codemode, false);
+  await assert.rejects(
+    tools
+      .get("gitwt_remove")
+      .execute({ target: "task", force: "false" }, { signal: new AbortController().signal }),
+    { code: "invalid_arguments" },
+  );
+  const controller = new AbortController();
+  const reason = new Error("Отмена до выполнения");
+  controller.abort(reason);
+  await assert.rejects(
+    tools.get("gitwt_create").execute({ branch: "task" }, { signal: controller.signal }),
+    reason,
+  );
 });
