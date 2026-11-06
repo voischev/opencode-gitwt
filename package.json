@@ -1,6 +1,6 @@
 {
   "name": "opencode-gitwt",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Git worktree tools for OpenCode, powered by gitwt",
   "type": "module",
   "main": "./src/index.js",
@@ -23,8 +23,7 @@
     "release": "node scripts/release.js"
   },
   "dependencies": {
-    "@voischev/gitwt": "^0.1.4",
-    "zod": "4.1.8"
+    "@voischev/gitwt": "^0.1.4"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.3"

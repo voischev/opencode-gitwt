@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -59,6 +59,29 @@ test("адаптер создаёт, находит и удаляет worktree �
   assert.equal(found.worktreePath, created.worktreePath);
   const listed = JSON.parse(await plugin.tool.gitwt_list.execute({ status: true }, ctx));
   assert.equal(listed.find((item) => item.branch === "feature/main").dirty, false);
+
+  await assert.rejects(plugin.tool.gitwt_create.execute({}, ctx), { code: "invalid_arguments" });
+  await assert.rejects(plugin.tool.gitwt_list.execute({ status: "true" }, ctx), {
+    code: "invalid_arguments",
+  });
+  await assert.rejects(plugin.tool.gitwt_cd.execute({ target: null }, ctx), {
+    code: "invalid_arguments",
+  });
+  await assert.rejects(plugin.tool.gitwt_list.execute({ unknown: true }, ctx), {
+    code: "invalid_arguments",
+  });
+  const unsaved = path.join(created.worktreePath, "unsaved.txt");
+  await writeFile(unsaved, "Сохранить изменения");
+  await assert.rejects(
+    plugin.tool.gitwt_remove.execute({ target: "feature/main", force: "false" }, ctx),
+    { code: "invalid_arguments" },
+  );
+  assert.equal(await readFile(unsaved, "utf8"), "Сохранить изменения");
+  await assert.rejects(
+    plugin.tool.gitwt_remove.execute({ target: "feature/main", force: false }, ctx),
+    { code: "worktree_dirty" },
+  );
+  await rm(unsaved);
 
   const removed = JSON.parse(
     await plugin.tool.gitwt_remove.execute({ target: "feature/main" }, ctx),
