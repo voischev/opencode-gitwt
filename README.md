@@ -37,17 +37,9 @@ change the session directory. Use `gitwt_list` to inspect copies and
 
 ## Configuration
 
-The plugin uses the shared gitwt configuration: `.gitwt.jsonc` in the project
-and `~/.config/gitwt/config.jsonc` globally. Options include `remote`, `base`,
+The plugin uses plain JSON: `.gitwt.json` in the project
+and `~/.config/gitwt/config.json` globally. Options include `remote`, `base`,
 `prefix`, `worktreeDir`, and `hooks`. See the core repository for details.
 
 For the standalone `gitwt` command, run `npm install -g @voischev/gitwt`.
-Upgrading from 0.1.x: move `.opencode/gitwt.jsonc` to `.gitwt.jsonc` and global
-settings from `~/.config/opencode/gitwt.jsonc` to `~/.config/gitwt/config.jsonc`.
-
-## Development
-
-GitHub is the primary repository; SourceCraft is a mirror. Releases publish to
-npm from GitHub with `NPM_TOKEN`.
-
-Run `npm ci --ignore-scripts`, `npm run check`, and `npm test`.
+Move existing settings to these paths and remove comments and trailing commas.
