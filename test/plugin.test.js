@@ -10,6 +10,7 @@ const REPO_ROOT = join(import.meta.dirname, "..");
 const REQUIRED_VERSION = "1.19.3";
 const TOOLS = ["gitwt_create", "gitwt_list", "gitwt_cd", "gitwt_remove"];
 const START_TIMEOUT = 30_000;
+const requireIntegration = process.env.GITWT_REQUIRE_OPENCODE === "1";
 
 function run(binary, args) {
   return new Promise((resolve) => {
@@ -29,9 +30,11 @@ const compatible = version === REQUIRED_VERSION;
 const reason = version
   ? `нужен opencode ${REQUIRED_VERSION}, найден ${version}`
   : "opencode не найден в PATH";
+const testOptions = { skip: compatible || requireIntegration ? false : reason, timeout: 90_000 };
 
 describe("регистрация gitwt-плагина в opencode", () => {
-  it("serve отдаёт четыре инструмента gitwt", { skip: compatible ? false : reason }, async (t) => {
+  it("serve отдаёт четыре инструмента gitwt", testOptions, async (t) => {
+    assert.equal(version, REQUIRED_VERSION, reason);
     const parent = join(tmpdir(), "opencode");
     await mkdir(parent, { recursive: true });
     const base = await realpath(await mkdtemp(join(parent, "gitwt-plugin-")));
@@ -69,8 +72,11 @@ describe("регистрация gitwt-плагина в opencode", () => {
 
     t.after(async () => {
       if (server.exitCode === null && server.signalCode === null) {
+        const stopped = new Promise((resolve) => server.once("close", resolve));
         server.kill("SIGTERM");
-        await new Promise((resolve) => server.once("close", resolve));
+        const killTimer = setTimeout(() => server.kill("SIGKILL"), 3000);
+        await stopped;
+        clearTimeout(killTimer);
       }
       await rm(base, { recursive: true, force: true });
     });
@@ -101,13 +107,16 @@ describe("регистрация gitwt-плагина в opencode", () => {
     });
 
     const query = `directory=${encodeURIComponent(canonical)}`;
-    const response = await fetch(`${url}/experimental/tool/ids?${query}`);
+    const response = await fetch(`${url}/experimental/tool/ids?${query}`, {
+      signal: AbortSignal.timeout(30_000),
+    });
     assert.ok(response.ok);
     const ids = await response.json();
     for (const tool of TOOLS) assert.ok(ids.includes(tool), `нет инструмента ${tool}`);
 
     const schemasResponse = await fetch(
       `${url}/experimental/tool?${query}&provider=openai&model=gpt-5`,
+      { signal: AbortSignal.timeout(30_000) },
     );
     assert.ok(schemasResponse.ok);
     const definitions = await schemasResponse.json();

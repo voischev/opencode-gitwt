@@ -26,9 +26,24 @@ jobs:
       - run: npm test
       - run: npm run release -- --check
 
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - run: npm ci --ignore-scripts
+      - run: npm install --global opencode-ai@1.19.3 --no-audit --no-fund
+      - name: Проверить интеграцию с OpenCode
+        env:
+          GITWT_REQUIRE_OPENCODE: "1"
+        run: node --test test/plugin.test.js
+
   mirror:
     if: github.event_name == 'push'
-    needs: checks
+    needs: [checks, integration]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -45,6 +60,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs:
       - checks
+      - integration
       - mirror
     runs-on: ubuntu-latest
     steps:
