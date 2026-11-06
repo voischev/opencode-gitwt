@@ -105,5 +105,24 @@ describe("регистрация gitwt-плагина в opencode", () => {
     assert.ok(response.ok);
     const ids = await response.json();
     for (const tool of TOOLS) assert.ok(ids.includes(tool), `нет инструмента ${tool}`);
+
+    const schemasResponse = await fetch(
+      `${url}/experimental/tool?${query}&provider=openai&model=gpt-5`,
+    );
+    assert.ok(schemasResponse.ok);
+    const definitions = await schemasResponse.json();
+    const schemas = Object.fromEntries(
+      definitions
+        .filter((tool) => TOOLS.includes(tool.id))
+        .map((tool) => [tool.id, tool.parameters]),
+    );
+    assert.deepEqual(schemas.gitwt_create.required, ["branch"]);
+    assert.deepEqual(schemas.gitwt_list.required, []);
+    assert.deepEqual(schemas.gitwt_cd.required, ["target"]);
+    assert.deepEqual(schemas.gitwt_remove.required, ["target"]);
+    assert.equal(schemas.gitwt_create.properties.branch.type, "string");
+    assert.equal(schemas.gitwt_create.properties.noHooks.type, "boolean");
+    assert.equal(schemas.gitwt_remove.properties.force.type, "boolean");
+    assert.equal(schemas.gitwt_remove.additionalProperties, false);
   });
 });
