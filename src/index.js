@@ -6,16 +6,16 @@ export async function GitwtPlugin({ directory }, config = {}) {
     tool: {
       gitwt_create: {
         description:
-          "Создать и проверить новый worktree. Продолжайте текущую сессию, используя возвращённый worktreePath в командах и файловых операциях. Сохраняйте worktree при паузе и передаче задачи.",
+          "Create and verify a new worktree. Use worktreePath for commands and files in the current session. Keep the worktree when pausing or handing off a task.",
         args: {
-          branch: z.string().describe("Имя новой ветки"),
-          base: z.string().optional().describe("Базовая remote-ветка"),
+          branch: z.string().describe("New branch name"),
+          base: z.string().optional().describe("Remote base branch"),
           from: z
             .string()
             .optional()
-            .describe("Явная локальная ссылка или проверенный commit вместо remote-базы"),
-          path: z.string().optional().describe("Полный путь нового worktree"),
-          noHooks: z.boolean().optional().describe("Явно отключить хуки для создаваемого worktree"),
+            .describe("Local ref or verified commit instead of a remote base"),
+          path: z.string().optional().describe("Destination path"),
+          noHooks: z.boolean().optional().describe("Disable hooks for this worktree"),
         },
         execute: async (args, ctx) =>
           JSON.stringify(
@@ -28,15 +28,15 @@ export async function GitwtPlugin({ directory }, config = {}) {
       },
       gitwt_list: {
         description:
-          "Показать worktree из реестра Git. status проверяет dirty и доступные ahead/behind; null означает неизвестное состояние.",
-        args: { status: z.boolean().optional() },
+          "List Git worktrees. With status, check dirty and available ahead/behind counts; null means unknown.",
+        args: { status: z.boolean().optional().describe("Check live worktree status") },
         execute: async (args, ctx) =>
           JSON.stringify(await listWorktrees(ctx.directory ?? directory, args)),
       },
       gitwt_cd: {
         description:
-          "Найти worktree по точной ветке или полному пути и вернуть его путь, HEAD и статус. Каталог текущей сессии не меняется: используйте worktreePath явно.",
-        args: { target: z.string() },
+          "Resolve a branch or full path to a worktree with HEAD and status. Use worktreePath explicitly; this does not change the session directory.",
+        args: { target: z.string().describe("Exact branch name or full worktree path") },
         execute: async ({ target }, ctx) =>
           JSON.stringify(
             await resolveWorktree(ctx.directory ?? directory, target, { status: true }),
@@ -44,11 +44,14 @@ export async function GitwtPlugin({ directory }, config = {}) {
       },
       gitwt_remove: {
         description:
-          "Только по явной просьбе удалить указанный worktree, убедившись, что он больше не используется. force разрешает потерю изменений, но не обходит ошибку preRemove. Без автокоммитов и отложенной очистки.",
+          "Remove a worktree only when explicitly requested and no longer in use. Force discards local changes but does not bypass a failing preRemove hook.",
         args: {
-          target: z.string(),
-          force: z.boolean().optional(),
-          keepBranch: z.boolean().optional(),
+          target: z.string().describe("Exact branch name or full worktree path"),
+          force: z.boolean().optional().describe("Allow discarding local changes"),
+          keepBranch: z
+            .boolean()
+            .optional()
+            .describe("Keep the branch after removing the worktree"),
         },
         execute: async ({ target, force, keepBranch }, ctx) =>
           JSON.stringify(
